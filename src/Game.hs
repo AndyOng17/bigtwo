@@ -1,95 +1,175 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use <&>" #-}
+{-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 module Game where
 
-import PokerCards 
-import RandomCard
-import System.Random (newStdGen)
+import qualified PokerCards as P
 import Relude (maybeToRight)
-import Data.Maybe ( fromMaybe, listToMaybe )
-import Data.List (delete)
+import Data.List (delete, maximumBy, group)
 
-newtype B2Card = B2 { getCard :: Card } deriving Eq
+type ErrorMsg = String
+
+newtype B2Card = B2 { getCard :: P.Card } deriving Eq
+
+type B2Deck = [B2Card]
 
 instance Show B2Card where
     show (B2 card) = show card
 
-type B2Deck = [B2Card]
-
 instance Ord B2Card where
-    compare (B2 (Card Two twoSuit)) (B2 (Card cardNum cardSuit))
-        | cardNum == Two = compare twoSuit cardSuit
+    compare (B2 (P.Card P.Two twoSuit)) (B2 (P.Card cardNum cardSuit))
+        | cardNum == P.Two = compare twoSuit cardSuit
         | otherwise = GT
-    compare (B2 (Card cardNum cardSuit)) (B2 (Card Two twoSuit))
-        | cardNum == Two = compare cardSuit twoSuit
+    compare (B2 (P.Card cardNum cardSuit)) (B2 (P.Card P.Two twoSuit))
+        | cardNum == P.Two = compare cardSuit twoSuit
         | otherwise = LT
     compare (B2 card1) (B2 card2) = compare card1 card2
 
-
 data FiveCard = FiveCard B2Card B2Card B2Card B2Card B2Card deriving (Eq, Show)
+
+instance Ord FiveCard where
+    compare fstHand sndHand
+        | isSameHandType = compare (handRank fstHand) (handRank sndHand)
+        | otherwise = compare fstHandType sndHandType
+        where fstHandType = b2HandType fstHand
+              sndHandType = b2HandType sndHand
+              isSameHandType = fstHandType == sndHandType
+
+handRank :: FiveCard -> Maybe B2Card
+handRank fiveCard@(FiveCard b2Card1@(B2 c1) b2Card2@(B2 c2) b2Card3@(B2 c3) b2Card4@(B2 c4) b2Card5@(B2 c5))
+    | isAceToFiveFlush fiveCard = Just . maximum $ cardList
+    | isTwoToSixFlush fiveCard = Just . maximum $ cardList
+    | P.isRoyalFlush c1 c2 c3 c4 c5 = Just . maximum $ cardList
+    | P.isStraightFlush c1 c2 c3 c4 c5 = Just . maximum $ cardList
+    | P.isFourOfAKind c1 c2 c3 c4 c5 = Just . maximum . maximumBy lengthOfGroup $ group cardList
+    | P.isFullHouse c1 c2 c3 c4 c5 = Just . maximum . maximumBy lengthOfGroup $ group cardList
+    | P.isFlush c1 c2 c3 c4 c5 = Just . maximum $ cardList
+    | isAceToFive fiveCard = Just . maximum $ cardList
+    | isTwoToSix fiveCard = Just . maximum $ cardList
+    | P.isStraight c1 c2 c3 c4 c5 = Just . maximum $ cardList
+    | otherwise = Nothing
+    where lengthOfGroup group1 group2 = compare (length group1) (length group2)
+          cardList = [b2Card1, b2Card2, b2Card3, b2Card4, b2Card5]
+
+data B2HandType = AceToFiveFlush
+                | TwoToSixFlush
+                | RoyalFlush 
+                | StraightFlush 
+                | FourOfAKind
+                | FullHouse
+                | Flush
+                | AceToFive
+                | TwoToSix
+                | Straight
+                deriving (Eq, Show, Ord)
+
+b2HandType :: FiveCard -> Either ErrorMsg B2HandType
+b2HandType fiveCard@(FiveCard (B2 c1) (B2 c2) (B2 c3) (B2 c4) (B2 c5)) 
+    | isAceToFiveFlush fiveCard = Right AceToFiveFlush
+    | isTwoToSixFlush fiveCard = Right TwoToSixFlush
+    | isAceToFive fiveCard = Right AceToFive
+    | isTwoToSix fiveCard = Right TwoToSix
+    | otherwise = do
+        pokerType <- maybeToRight "Not a valid 5-card play" $ P.handType c1 c2 c3 c4 c5
+        case pokerType of 
+            P.RoyalFlush    -> return RoyalFlush 
+            P.StraightFlush -> return StraightFlush 
+            P.FourOfAKind   -> return FourOfAKind
+            P.FullHouse     -> return FullHouse
+            P.Flush         -> return Flush
+            P.Straight      -> return Straight
+
+isAceToFiveFlush :: FiveCard -> Bool
+isAceToFiveFlush 
+    (FiveCard
+    (B2 (P.Card P.Ace suit1)) 
+    (B2 (P.Card P.Two suit2)) 
+    (B2 (P.Card P.Three suit3)) 
+    (B2 (P.Card P.Four suit4)) 
+    (B2 (P.Card P.Five suit5))) = all (== suit1) [suit2, suit3, suit4, suit5]
+isAceToFiveFlush _ = False
+
+isAceToFive :: FiveCard -> Bool
+isAceToFive 
+    (FiveCard
+    (B2 (P.Card P.Ace suit1)) 
+    (B2 (P.Card P.Two suit2)) 
+    (B2 (P.Card P.Three suit3)) 
+    (B2 (P.Card P.Four suit4)) 
+    (B2 (P.Card P.Five suit5))) = not $ all (== suit1) [suit2, suit3, suit4, suit5]
+isAceToFive _ = False
+
+isTwoToSixFlush :: FiveCard -> Bool
+isTwoToSixFlush 
+    (FiveCard
+    (B2 (P.Card P.Two suit1)) 
+    (B2 (P.Card P.Three suit2)) 
+    (B2 (P.Card P.Four suit3)) 
+    (B2 (P.Card P.Five suit4)) 
+    (B2 (P.Card P.Six suit5))) = all (== suit1) [suit2, suit3, suit4, suit5] 
+isTwoToSixFlush _ = False
+
+isTwoToSix :: FiveCard -> Bool
+isTwoToSix 
+    (FiveCard
+    (B2 (P.Card P.Two suit1)) 
+    (B2 (P.Card P.Three suit2)) 
+    (B2 (P.Card P.Four suit3)) 
+    (B2 (P.Card P.Five suit4)) 
+    (B2 (P.Card P.Six suit5))) = not $ all (== suit1) [suit2, suit3, suit4, suit5] 
+isTwoToSix _ = False
 
 data Play = Single B2Card
           | Pair B2Card B2Card
           | Triple B2Card B2Card B2Card
-          | Combo B2Card B2Card B2Card B2Card B2Card
+          | Quintuple FiveCard
           | Pass
           deriving Eq
-
 
 instance Show Play where
     show (Single (B2 card)) = "Single " ++ show card
     show (Pair (B2 card1) (B2 card2)) = "Pair " ++ show card1 ++ " " ++ show card2
     show (Triple (B2 card1) (B2 card2) (B2 card3)) = "Triple " ++ show card1 ++ " " ++ show card2 ++ " " ++ show card3
-    show (Combo (B2 card1) (B2 card2) (B2 card3) (B2 card4) (B2 card5)) =
-        "Combo " ++ show card1 ++ " " ++ show card2 ++ " " ++ show card3 ++ " " ++ show card4 ++ " " ++ show card5
+    show (Quintuple (FiveCard (B2 card1) (B2 card2) (B2 card3) (B2 card4) (B2 card5))) =
+        "Quintuple " ++ show card1 ++ " " ++ show card2 ++ " " ++ show card3 ++ " " ++ show card4 ++ " " ++ show card5
     show Pass = show Pass
 
-comparePlays :: Play -> Play -> Maybe Ordering
+comparePlays :: Play -> Play -> Either ErrorMsg Ordering
+comparePlays (Single fstCard) (Single sndCard) = Right $ compare fstCard sndCard
 comparePlays
-    (Single fstCard)
-    (Single sndCard) = Just $ compare fstCard sndCard
-comparePlays
-    (Pair fstCard1@(B2 (Card fstNum1 fstSuit1)) (B2 (Card fstNum2 fstSuit2)))
-    (Pair sndCard1@(B2 (Card sndNum1 _)) (B2 (Card sndNum2 _)))
-    | notPairs = Nothing
-    | sameNumOnBothPairs = if Spade `elem` [fstSuit1, fstSuit2] then Just GT else Just LT
-    | otherwise = Just $ compare fstCard1 sndCard1
+    (Pair fstCard1@(B2 (P.Card fstNum1 fstSuit1)) (B2 (P.Card fstNum2 fstSuit2)))
+    (Pair sndCard1@(B2 (P.Card sndNum1 _)) (B2 (P.Card sndNum2 _)))
+    | notPairs = Left "Not comparing 2 pairs"
+    | sameNumOnBothPairs = if P.Spade `elem` [fstSuit1, fstSuit2] then Right GT else Right LT
+    | otherwise = Right $ compare fstCard1 sndCard1
     where notPairs = not $ fromEnum fstNum1 == fromEnum fstNum2 && fromEnum sndNum1 == fromEnum sndNum2
           sameNumOnBothPairs = all (== fromEnum fstNum1) [fromEnum fstNum2, fromEnum sndNum1, fromEnum sndNum2]
 comparePlays
-    (Triple fstCard1@(B2 (Card fstNum1 _)) (B2 (Card fstNum2 _)) (B2 (Card fstNum3 _)))
-    (Triple sndCard1@(B2 (Card sndNum1 _)) (B2 (Card sndNum2 _)) (B2 (Card sndNum3 _)))
-    | notTriples = Nothing
-    | otherwise = Just $ compare fstCard1 sndCard1
+    (Triple fstCard1@(B2 (P.Card fstNum1 _)) (B2 (P.Card fstNum2 _)) (B2 (P.Card fstNum3 _)))
+    (Triple sndCard1@(B2 (P.Card sndNum1 _)) (B2 (P.Card sndNum2 _)) (B2 (P.Card sndNum3 _)))
+    | notTriples = Left "Not comparing 2 triple"
+    | otherwise = Right $ compare fstCard1 sndCard1
     where notTriples = not $ all ((== fromEnum fstNum1) . fromEnum) [fstNum2, fstNum3]
                           && all ((== fromEnum sndNum1) . fromEnum) [sndNum2, sndNum3]
-comparePlays
-    (Combo (B2 fstComboCard1) (B2 fstComboCard2) (B2 fstComboCard3) (B2 fstComboCard4) (B2 fstComboCard5))
-    (Combo (B2 sndComboCard1) (B2 sndComboCard2) (B2 sndComboCard3) (B2 sndComboCard4) (B2 sndComboCard5)) = do 
-        combo1Type <- mbCombo1Type
-        combo2Type <- mbCombo2Type
-        let sameComboType = combo1Type == combo2Type
-        return $ if not sameComboType 
-                 then compare combo1Type combo2Type
-                 else GT
-    where mbCombo1Type = handType fstComboCard1 fstComboCard2 fstComboCard3 fstComboCard4 fstComboCard5
-          mbCombo2Type = handType sndComboCard1 sndComboCard2 sndComboCard3 sndComboCard4 sndComboCard5
-comparePlays _ _ = Nothing
+comparePlays (Quintuple fstFiveCard) (Quintuple sndFiveCard) = do 
+    combo1Type <- b2HandType fstFiveCard 
+    combo2Type <- b2HandType sndFiveCard 
+    return $ compare combo1Type combo2Type
+comparePlays _ _ = Left "Only 2 play of same type can be compared"
 
 getCardsFromPlay :: Play -> [B2Card]
 getCardsFromPlay Pass = []
 getCardsFromPlay (Single card1) = [card1]
 getCardsFromPlay (Pair card1 card2) = [card1, card2]
 getCardsFromPlay (Triple card1 card2 card3) = [card1, card2, card3]
-getCardsFromPlay (Combo card1 card2 card3 card4 card5) = [card1, card2, card3, card4, card5]
+getCardsFromPlay (Quintuple (FiveCard card1 card2 card3 card4 card5)) = [card1, card2, card3, card4, card5]
 
 playToPlayType :: Play -> String
 playToPlayType (Single {}) = "Single"
 playToPlayType (Pair {}) = "Pair"
 playToPlayType (Triple {}) = "Triple"
-playToPlayType (Combo {}) = "Combo"
+playToPlayType (Quintuple {}) = "Quintuple"
 playToPlayType Pass = "Pass"
-
 
 data Discard = Discard { trick :: Int
                        , play :: Play
@@ -134,6 +214,8 @@ data Seat = North | East | South | West deriving (Show, Eq, Enum)
 
 data Player = P1 | C1 | P2 | C2 | P3 | C3 | P4 | C4 deriving (Show, Eq)
 
+type Winner = Player
+
 data Setting = Setting (Maybe Player) (Maybe Player) (Maybe Player) (Maybe Player)
 
 playerToHand :: Player -> Hands -> Either ErrorMsg Hand
@@ -165,8 +247,6 @@ playerToSeat C3 = South
 playerToSeat P4 = West
 playerToSeat C4 = West
 
-type Winner = Player
-
 data Status = Alive Discards Hands
             | Ended Winner Discards Hands
             deriving Eq
@@ -183,8 +263,6 @@ instance Show Status where
         ++ show discards ++ "\n"
         ++ show hands ++ "\n"
         ++ "Winner: " ++ show winner
-
-type ErrorMsg = String
 
 nextPlayer :: Int -> Player -> Seat
 nextPlayer 2 P2 = North
@@ -219,26 +297,31 @@ gameEndedMsg = "Plays can't be made when game has ended"
 
 processPlay :: Player -> Status -> Play -> Either ErrorMsg Status
 processPlay _ (Ended {}) _ = Left gameEndedMsg
-processPlay aPlayer status@(Alive discards hands) aPlay
+processPlay aPlayer status@(Alive _ _) Pass 
+    | isNewTrick status = Left "Can't pass when starting a new trick"
+    | otherwise = updateStatus aPlayer Pass status
+processPlay aPlayer status@(Alive _ _) aPlay
     | not isPlayerTurn = Left $ "It's not " ++ show aPlayer ++ "'s turn"
-    | isPassOnNewTrick = Left "Can't pass when leading a trick"
-    | isWrongPlayType = Left "Wrong play type"
-    | otherwise = updateStatus aPlayer aPlay status
+    | otherwise = do 
+        pervailingPlay  <- playOfCurrTick status
+        isLegalPlayType <- (/= GT) <$> comparePlays aPlay pervailingPlay
+        if isLegalPlayType 
+        then updateStatus aPlayer aPlay status
+        else Left $ "Attemping to play " 
+                 ++ show aPlay 
+                 ++ " which is not greater than the prevailing play " 
+                 ++ show pervailingPlay
     where isPlayerTurn = maybe True (`isRightPlayer` aPlayer) (whoseTurn status)
-          isPassOnNewTrick = isStartingNewTrick && aPlay == Pass
-          isWrongPlayType = fromMaybe False $ do
-            currPlayTyp <- playTypeOfCurrTrick status -- completely new game when Nothing
-            return $ not isStartingNewTrick && currPlayTyp /= playToPlayType aPlay
-          isStartingNewTrick = isNewTrick status
-          lastDiscard = fmap play . listToMaybe . getDiscards $ discards
-          isLegalFollowUp = if isStartingNewTrick then Just True else undefined
 
 updateStatus :: Player -> Play -> Status -> Either ErrorMsg Status
 updateStatus _ _ Ended {} = Left gameEndedMsg
+updateStatus aPlayer Pass (Alive discards hands) = Right $ Alive updatedDiscards hands
+    where currTrickNo = trick . head . getDiscards $ discards
+          updatedDiscards = Discards $ Discard currTrickNo Pass aPlayer : getDiscards discards
 updateStatus aPlayer aPlay status@(Alive discards hands) = do
     handToUpdate <- playerToHand aPlayer hands
     updatedHand <- removePlay aPlay handToUpdate
-    let updatedDiscards =  Discards $ Discard trickNo aPlay aPlayer : getDiscards discards
+    let updatedDiscards = Discards $ Discard trickNo aPlay aPlayer : getDiscards discards
         isUpdatedHandEmpty = null $ getHand updatedHand
     if isUpdatedHandEmpty
     then updateHands (playerToSeat aPlayer) updatedHand hands >>= (return . Ended aPlayer updatedDiscards)
@@ -275,7 +358,7 @@ removeCard _ (Hand []) = Left "Empty hand"
 removeCard card (Hand hand) = if card `elem` hand
                               then Right . Hand $ delete card hand
                               else Left $ "Attempting to remove "
-                                        ++ cardToString (getCard card)
+                                        ++ P.cardToString (getCard card)
                                         ++ " that can't be found in the hand"
 
 isPlayInHand :: Play -> Hand -> Maybe Bool
@@ -283,7 +366,7 @@ isPlayInHand Pass _ = Nothing
 isPlayInHand (Single card1) (Hand deck) = Just $ card1 `elem` deck
 isPlayInHand (Pair card1 card2) (Hand deck) = Just $ card1 `elem` deck && card2 `elem` deck
 isPlayInHand (Triple card1 card2 card3) (Hand deck) = Just $ card1 `elem` deck && card2 `elem` deck && card3 `elem` deck
-isPlayInHand (Combo card1 card2 card3 card4 card5) (Hand deck) =
+isPlayInHand (Quintuple (FiveCard card1 card2 card3 card4 card5)) (Hand deck) =
     Just $ card1 `elem` deck && card2 `elem` deck && card3 `elem` deck && card4 `elem` deck && card5 `elem` deck
 
 isNewTrick :: Status -> Bool
@@ -302,23 +385,26 @@ isNewTrick (Alive (Discards discards) TwoP {})
     | otherwise = let (lastPlay1:_) = discards
                   in play lastPlay1 == Pass
 
-playTypeOfCurrTrick :: Status -> Maybe String
-playTypeOfCurrTrick (Alive (Discards []) _) = Nothing
-playTypeOfCurrTrick (Ended {}) = Nothing
-playTypeOfCurrTrick (Alive (Discards discards) _) =
-    Just . playToPlayType . play . head . dropWhile ((== Pass) . play) $ discards
+playTypeOfCurrTrick :: Status -> Either ErrorMsg String
+playTypeOfCurrTrick (Alive (Discards []) _) = Left "Prevailing play type not available because starting a new game"
+playTypeOfCurrTrick (Ended {}) = Left "Prevailing play type not available because game has ended"
+playTypeOfCurrTrick status@(Alive (Discards discards) _) =
+    if isNewTrick status 
+    then Left "Prevailing play type not available because starting a new trick"  
+    else Right . playToPlayType . play . head . dropWhile ((== Pass) . play) $ discards
+
+playOfCurrTick :: Status -> Either ErrorMsg Play 
+playOfCurrTick (Alive (Discards []) _) = Left "Prevailing play not available because starting a new game"
+playOfCurrTick (Ended {}) = Left "Prevailing play not available because game has ended"
+playOfCurrTick status@(Alive (Discards discards) _) = 
+    if isNewTrick status 
+    then Left "Prevailing play not available because starting a new trick" 
+    else Right . play . head . dropWhile ((== Pass) . play) $ discards
 
 newGame :: Int -> B2Deck -> Status
 newGame n deck
     | n > 4 || n < 2 = error "Invalid number of players"
     | otherwise = Alive (Discards []) $ dealCard n deck
-
-runGame :: IO ()
-runGame = do
-    gen <- newStdGen
-    let newShuffledDeck = B2 <$> genFullDeckShuffled gen
-        newGameStatus = newGame 4 newShuffledDeck
-    return ()
 
 dealCard :: Int -> B2Deck -> Hands
 dealCard _ deck | length deck /= 52 = error "Deck with incorrect amount of cards had been used"
@@ -342,11 +428,3 @@ dealCards' 2 deck hands@(TwoP (Hand hand1) (Hand hand2)) = case splitAt 2 deck o
     _ -> error "Deck with incorrect amount of cards had been used"
 dealCards' _ _ _ = error "Invalid number of players specified"
 
-sampleGame :: IO Status
-sampleGame = shuffledDeck >>= (return . newGame 4)
-
-shuffledDeck :: IO B2Deck
-shuffledDeck = newStdGen >>= return . fmap B2 . genFullDeckShuffled
-
-sampleStatus :: Status
-sampleStatus = newGame 4 (fmap B2 fullDeck)
