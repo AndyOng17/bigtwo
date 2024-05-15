@@ -36,6 +36,7 @@ packages:
 # forks / in-progress versions pinned to a git hash. For example:
 #
 extra-deps:
+- list-duplicate-0.1.0.0
 - ../deck
 - currency-codes-3.0.0.1
 # - acme-missiles-0.3
