@@ -1,12 +1,12 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use <&>" #-}
-{-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
+{-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-} -- DO REMOVE to ensure that there are no incomplete pattern matches
 module Game where
 
 import qualified PokerCards as P
 import Relude (maybeToRight)
 import Data.List (delete, maximumBy, group)
-import Debug.Trace (trace)
+import Data.Either.Extra (mapLeft)
 
 type ErrorMsg = String
 
@@ -82,15 +82,15 @@ instance Enum B2HandType where
     fromEnum TwoToSix       = 1
     fromEnum Straight       = 0
     toEnum 9 = AceToFiveFlush
-    toEnum 8 = TwoToSixFlush 
-    toEnum 7 = RoyalFlush    
-    toEnum 6 = StraightFlush 
-    toEnum 5 = FourOfAKind   
-    toEnum 4 = FullHouse     
-    toEnum 3 = Flush         
-    toEnum 2 = AceToFive     
-    toEnum 1 = TwoToSix      
-    toEnum 0 = Straight      
+    toEnum 8 = TwoToSixFlush
+    toEnum 7 = RoyalFlush
+    toEnum 6 = StraightFlush
+    toEnum 5 = FourOfAKind
+    toEnum 4 = FullHouse
+    toEnum 3 = Flush
+    toEnum 2 = AceToFive
+    toEnum 1 = TwoToSix
+    toEnum 0 = Straight
     toEnum _ = error "Only 0 to 9 allowed for B2HandType"
 
 b2HandType :: FiveCard -> Either ErrorMsg B2HandType
@@ -404,10 +404,10 @@ processPlay aPlayer status@(Alive (Discards discards) _) Pass
 processPlay aPlayer status@(Alive (Discards []) _) fstPlay = updateStatus aPlayer fstPlay status
 processPlay aPlayer status@(Alive _ _) aPlay
     | not isPlayerTurn = Left $ "It's not " ++ show aPlayer ++ "'s turn"
-    | isNewTrick status = trace (show $ updateStatus aPlayer aPlay status) (updateStatus aPlayer aPlay status)
+    | isNewTrick status = updateStatus aPlayer aPlay status
     | otherwise = do
         pervailingPlay  <- playOfCurrTick status
-        isLegalPlayType <- (== GT) <$> comparePlays aPlay pervailingPlay
+        isLegalPlayType <- (== GT) <$> mapLeft (wrongPlayType pervailingPlay) (comparePlays aPlay pervailingPlay)
         if isLegalPlayType
         then updateStatus aPlayer aPlay status
         else Left $ "Attempting to play "
@@ -415,6 +415,11 @@ processPlay aPlayer status@(Alive _ _) aPlay
                  ++ " which is not greater than the prevailing play "
                  ++ show pervailingPlay
     where isPlayerTurn = whoseTurn status == aPlayer
+          wrongPlayType pervailPlay = const 
+                                    $ "Attempting to play " 
+                                   ++ show aPlay 
+                                   ++ " when the prevailing play is " 
+                                   ++ show pervailPlay
 
 updateStatus :: Player -> Play -> Status -> Either ErrorMsg Status
 updateStatus _ _ Ended {} = Left gameEndedMsg
@@ -475,15 +480,15 @@ isNewTrick :: Status -> Bool
 isNewTrick (Ended {}) = False
 isNewTrick (Alive (Discards []) _) = True
 isNewTrick (Alive (Discards discards) FourP {})
-    | length discards <= 4 = False
+    | length discards < 4 = False
     | otherwise = let (lastPlay1:lastPlay2:lastPlay3:_) = discards
                   in play lastPlay1 == Pass && play lastPlay2 == Pass && play lastPlay3 == Pass
 isNewTrick (Alive (Discards discards) ThreeP {})
-    | length discards <= 3 = False
+    | length discards < 3 = False
     | otherwise = let (lastPlay1:lastPlay2:_) = discards
                   in play lastPlay1 == Pass && play lastPlay2 == Pass
 isNewTrick (Alive (Discards discards) TwoP {})
-    | length discards <= 2 = False
+    | length discards < 2 = False
     | otherwise = let (lastPlay1:_) = discards
                   in play lastPlay1 == Pass
 
@@ -503,6 +508,13 @@ playOfCurrTick status@(Alive (Discards discards) _) =
     then Left "Prevailing play not available because starting a new trick"
     else Right . play . head . dropWhile ((== Pass) . play) $ discards
 
+leaderOfCurrTick :: Status -> Either ErrorMsg Player
+leaderOfCurrTick (Alive (Discards []) _) = Left "Prevailing play not available because starting a new game"
+leaderOfCurrTick (Ended {}) = Left "Prevailing play not available because game has ended"
+leaderOfCurrTick status@(Alive (Discards discards) _) =
+    if isNewTrick status
+    then Left "Prevailing play not available because starting a new trick"
+    else Right . playedBy . head . dropWhile ((== Pass) . play) $ discards
 
 newGame :: [Player] -> B2Deck -> Status
 newGame [northP, eastP, southP, westP] deck

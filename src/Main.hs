@@ -7,73 +7,92 @@ import Analytics
 import Game
 import Relude (readMaybe)
 
-
 main :: IO ()
 main = do
     deck <- genB2FullDeckShuffled
     let newStatus = newGame [P1,P2,P3,P4] deck
-    _ <- prompt "New game created" newStatus []
+    _ <- gameLoop "New game created" newStatus []
     return ()
 
-isValidInput :: String -> Either String Char
-isValidInput []   = Left "Empty input"
-isValidInput (x:xs)
-    | xs /= []           = Left "Incorrect size"
-    | x `elem` legalChar = Right $ toUpper x
-    | otherwise          = Left "Incorrect character"
-    where legalChar = ['H','S','h','s','R','r']
+gameLoop :: ErrorMsg -> Status -> [Int] -> IO (Either ErrorMsg ())
+gameLoop msg status selectedCards = do
+    (playMade, latestSelections) <- processTurn msg status selectedCards
+    print latestSelections
+    case processPlay (whoseTurn status) status playMade of
+        Left errMsg 
+            -> gameLoop errMsg status latestSelections
+        Right newStatus@(Alive (Discards (Discard _ Pass lastPlayer :_)) _)
+            -> gameLoop (show lastPlayer ++ " passed") newStatus []
+        Right newStatus@(Alive (Discards (Discard _ lastPlay lastPlayer:_)) _)
+            -> gameLoop (show lastPlayer ++ " played " ++ show lastPlay) newStatus selectedCards
+        Right newStatus@(Ended winner (Discards (Discard _ lastPlay _:_)) _) 
+            -> return <$> report (show winner ++ " wins with " ++ show lastPlay) newStatus []
 
-prompt :: String -> Status -> [Int] -> IO Status
-prompt msg status@(Alive _ hands) selectedCards = do
+processTurn :: ErrorMsg -> Status -> [Int] -> IO (Play, [Int])
+processTurn msg status selectedCards = do
+    let ioEtAction = do 
+            input <- prompt msg status selectedCards
+            _     <- return $ validateInput status selectedCards (toUpper <$> input)
+            return $ processInput status selectedCards (toUpper <$> input)
+    etAction <- ioEtAction
+    case etAction of
+        Left errMsg -> processTurn errMsg status selectedCards
+        Right ClearSelections -> processTurn "Selections cleared" status []
+        Right (UpdateSelections newSelections) -> processTurn "Added" status newSelections
+        Right (MakePlay playMade) -> return (playMade, selectedCards)
+
+prompt :: String -> Status -> [Int] -> IO String
+prompt msg status@(Alive _ _) selectedCards = report msg status selectedCards >> getLine
+prompt msg status@(Ended {}) _ = print status >> putStrLn msg >> putStr "[Press any key]" >> getLine
+
+report :: String -> Status -> [Int] -> IO ()
+report msg status@(Ended {}) _ = do print status >> putStrLn msg >> putStrLn "Game ended"
+report msg status@(Alive _ hands) selectedCards = do
     let currHand = (`playerToHand` hands) . whoseTurn $ status
         selectedCards' = (`inputToCard` currHand) <$> selectedCards
         prevailingPlay = either (const "New Trick") show (playOfCurrTick status)
+        leaderCurrTrick = either (const "NA") show (leaderOfCurrTick status)
     print status
-    putStrLn $ "Prevailing Play [" ++ prevailingPlay ++ "] "
+    putStrLn $ "Prevailing Play: [" ++ prevailingPlay ++ "] Play by: [" ++ leaderCurrTrick ++ "]"
     putStrLn msg
     putStr (show (whoseTurn status) ++ " " ++ show selectedCards' ++ " : ")
-    newInput <- getLine
-    validateInput status selectedCards (toUpper <$> newInput)
-prompt msg status@(Ended {}) _ = print status >> putStrLn msg >> return status
 
--- validateInput should be pure - just return message, status, selectedCards
-validateInput :: Status -> [Int] -> [Char] -> IO Status
-validateInput status@(Alive {}) selectedCards "" = prompt "No input" status selectedCards
-validateInput status@(Alive {}) [] "S" = prompt "Can't submit when no cards are selected" status []
-validateInput status _ "C" = prompt "Cleared" status [] 
-validateInput status@(Alive {}) _ "P"
-    = let currPlayer = whoseTurn status
-      in case processPlay currPlayer status Pass of
-            (Left errMsg) -> prompt errMsg status []
-            (Right updatedStatus) -> prompt (show currPlayer ++ " passed") updatedStatus []
+data Action = MakePlay Play | ClearSelections | UpdateSelections [Int] deriving (Eq, Show)
+
+processInput :: Status -> [Int] -> [Char] -> Either ErrorMsg Action
+processInput _ _ "P" = Right $ MakePlay Pass
+processInput _ _ "C" = Right ClearSelections
+processInput status@(Alive _ hands) selectedCards "S" = do
+    let currPlayer = whoseTurn status
+        currHand = playerToHand currPlayer hands
+    selectedPlay <- inputToPlay selectedCards currHand
+    return $ MakePlay selectedPlay
+processInput _ selectedCards input = Right $ UpdateSelections ((read input :: Int):selectedCards)
+
+validateInput :: Status -> [Int] -> [Char] -> Either ErrorMsg ()
+validateInput (Alive {}) _ "" = Left "No input"
+validateInput (Alive {}) [] "S" = Left "Can't submit when no cards are selected"
 validateInput status@(Alive _ hands) selectedCards "S"
-    = do let currPlayer = whoseTurn status
-             currHand = playerToHand currPlayer hands
-             newStatus = do validatedPlay <- inputToPlay selectedCards currHand
-                            newStatus' <- processPlay currPlayer status validatedPlay
-                            return (newStatus', validatedPlay)
-         case newStatus of (Left errMsg) -> prompt errMsg status []
-                           (Right (updatedStatus, cardPlayed)) -> prompt (show cardPlayed ++ "  played ") updatedStatus []
+    = let currPlayer = whoseTurn status
+          currHand = playerToHand currPlayer hands
+      in case inputToPlay selectedCards currHand of
+            (Left errMsg) -> Left errMsg
+            (Right _) -> Right ()
+validateInput _ _ "C" = Right ()
+validateInput _ _ "P" = Right ()
 validateInput status@(Alive _ hands) selectedCards input
-    | not isNumber && (length input > 1 || notElem (head input) ['P', 'p', 'S', 's'])
-        = prompt "Invalid input" status selectedCards
-    | inputAsInt `elem` selectedCards
-        = prompt "Can't select the same card twice" status selectedCards
+    | not isNumber && (length input > 1 || notElem (head input) ['P', 'p', 'S', 's']) = Left "Invalid input"
+    | inputAsInt `elem` selectedCards = Left "Can't select the same card twice"
     | isNumber && (inputAsInt > lengthOfHand || inputAsInt <= 0)
-        = prompt ("Selections available goes from 1 to " ++ show lengthOfHand) status selectedCards
-    | isNumber && length selectedCards >= 5
-        = prompt "Can't select more than 5 cards" status selectedCards
-    | otherwise
-        = do let newSelectedCards = inputAsInt:selectedCards
-             prompt "Added" status newSelectedCards
-    where isNumber = case (readMaybe input :: Maybe Int) of
-            Just _ -> True
-            Nothing -> False
+        = Left ("Selections available goes from 1 to " ++ show lengthOfHand)
+    | isNumber && length selectedCards >= 5 = Left "Can't select more than 5 cards"
+    | otherwise = Right ()
+    where isNumber = case (readMaybe input :: Maybe Int) of Just _ -> True
+                                                            Nothing -> False
           lengthOfHand = let (Hand aHand _) = currHand in length aHand
           currPlayer = whoseTurn status
           currHand = playerToHand currPlayer hands
           inputAsInt = read input :: Int
-
 
 inputToPlay :: [Int] -> Hand -> Either ErrorMsg Play
 inputToPlay [s1] (Hand aHand _) = let card = aHand !! ((read . show $ s1 :: Int) - 1) in return $ Single card
@@ -90,7 +109,7 @@ inputToPlay [s1, s2, s3, s4, s5] (Hand aHand _) = let card1 = aHand !! ((read . 
                                                       card4 = aHand !! ((read . show $ s4 :: Int) - 1)
                                                       card5 = aHand !! ((read . show $ s5 :: Int) - 1)
                                                   in getPlayFromCard [card1, card2, card3, card4, card5]
-inputToPlay [_, _, _, _] _ = Left "4-card plays are illegal" 
+inputToPlay [_, _, _, _] _ = Left "4-card plays are illegal"
 
 inputToCard :: Int -> Hand -> B2Card
 inputToCard index (Hand aHand _) = aHand !! ((read . show $ index :: Int) - 1)
